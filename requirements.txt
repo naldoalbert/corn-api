@@ -4,4 +4,5 @@ tensorflow
 pillow
 numpy
 gunicorn
-# pip install mysql-connector-python flask
+# pip install mysql-connector-python flask --> jika menggunakan mysql
+# pip install psycopg2-binary --> jika menggunakan postgreesql

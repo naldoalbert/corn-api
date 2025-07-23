@@ -5,49 +5,47 @@ import tensorflow as tf
 from PIL import Image
 import io
 from flask_cors import CORS
-import mysql.connector
+import psycopg2  # Gantikan mysql.connector
 from datetime import datetime
 
 app = Flask(__name__)
 CORS(app)
 
-# Koneksi ke database - Gunakan variabel lingkungan
-DB_HOST = os.environ.get("DB_HOST")
-DB_USER = os.environ.get("DB_USER")
-DB_PASSWORD = os.environ.get("DB_PASSWORD")
-DB_NAME = os.environ.get("DB_NAME")
+# Koneksi ke database PostgreSQL (Railway menyediakan ini sebagai environment variable)
+PGHOST = os.environ.get("PGHOST")
+PGUSER = os.environ.get("PGUSER")
+PGPASSWORD = os.environ.get("PGPASSWORD")
+PGDATABASE = os.environ.get("PGDATABASE")
+PGPORT = os.environ.get("PGPORT", "5432")  # Default PostgreSQL port
 
-db = None # Inisialisasi db ke None
-cursor = None # Inisialisasi cursor ke None
+db = None
+cursor = None
 
 try:
-    db = mysql.connector.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME
+    db = psycopg2.connect(
+        host=PGHOST,
+        user=PGUSER,
+        password=PGPASSWORD,
+        database=PGDATABASE,
+        port=PGPORT
     )
     cursor = db.cursor()
-    print("Koneksi database berhasil!")
-except mysql.connector.Error as err:
-    print(f"Error koneksi database: {err}")
-    # Di produksi, pertimbangkan untuk menangani error ini lebih serius,
-    # mungkin keluar dari aplikasi jika koneksi DB sangat krusial.
+    print("Koneksi database PostgreSQL berhasil!")
+except psycopg2.Error as err:
+    print(f"Error koneksi database PostgreSQL: {err}")
 
-# Load model klasifikasi jagung - Gunakan variabel lingkungan atau path default
+# Load model klasifikasi jagung
 model_path = os.environ.get("MODEL_PATH", "model/model_klasifikasi_jagung_DenseNet.h5")
-model = None # Inisialisasi model ke None
+model = None
 try:
     model = tf.keras.models.load_model(model_path)
     print("Model berhasil dimuat!")
 except Exception as e:
     print(f"Error memuat model dari {model_path}: {e}")
-    # Tangani error jika model tidak dapat dimuat
 
-# Label klasifikasi penyakit daun jagung
+# Label klasifikasi
 labels = ['Blight', 'Common_Rust', 'Gray_Leaf_Spot', 'Healthy']
 
-# Fungsi untuk preprocessing gambar
 def preprocess_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     img = img.resize((256, 256))
@@ -63,7 +61,7 @@ def index():
 def predict():
     if model is None:
         return jsonify({'error': 'Model not loaded'}), 500
-    if db is None or not db.is_connected():
+    if db is None:
         return jsonify({'error': 'Database connection not available'}), 500
 
     try:
@@ -75,13 +73,13 @@ def predict():
         img = preprocess_image(image_bytes)
 
         predictions = model.predict(img)
-        class_index = np.argmax(predictions)
+        class_index = int(np.argmax(predictions))
         confidence = float(np.max(predictions))
         predicted_label = labels[class_index]
 
-        # Simpan hasil prediksi ke database
-        insert_query = "INSERT INTO predictions (label, confidence) VALUES (%s, %s)"
-        cursor.execute(insert_query, (predicted_label, confidence))
+        # Simpan hasil prediksi ke PostgreSQL
+        insert_query = "INSERT INTO predictions (label, confidence, timestamp) VALUES (%s, %s, %s);"
+        cursor.execute(insert_query, (predicted_label, confidence, datetime.now()))
         db.commit()
 
         return jsonify({
@@ -94,17 +92,17 @@ def predict():
 
 @app.route('/history', methods=['GET'])
 def history():
-    if db is None or not db.is_connected():
+    if db is None:
         return jsonify({'error': 'Database connection not available'}), 500
     try:
-        cursor.execute("SELECT id, label, confidence, timestamp FROM predictions ORDER BY timestamp DESC")
+        cursor.execute("SELECT id, label, confidence, timestamp FROM predictions ORDER BY timestamp DESC;")
         rows = cursor.fetchall()
         result = []
         for row in rows:
             result.append({
                 "id": row[0],
                 "label": row[1],
-                "confidence": row[2],
+                "confidence": float(row[2]),
                 "timestamp": row[3].isoformat()
             })
         return jsonify(result)
@@ -112,5 +110,4 @@ def history():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    # Gunakan PORT dari variabel lingkungan, default ke 5000 untuk pengembangan lokal
-    app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    app.run(debug=True)
